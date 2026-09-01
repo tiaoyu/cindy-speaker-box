@@ -1,0 +1,6 @@
+# Cindy 插件打包产物（可随时用 ghost_forge_pack 重新生成）
+*.cindy
+
+# 系统文件
+Thumbs.db
+.DS_Store

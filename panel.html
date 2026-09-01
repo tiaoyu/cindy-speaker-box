@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/panel.css">
+</head>
+<body>
+<main id="app">
+  <section class="hero">
+    <div id="phaseDot" class="dot"></div>
+    <div>
+      <div id="phaseTitle" class="phase-title">未启动</div>
+      <div id="phaseDesc" class="phase-desc">点「开始聆听」把耳机变成音箱</div>
+    </div>
+  </section>
+
+  <section class="actions">
+    <button id="btnToggle" class="primary">开始聆听</button>
+    <button id="btnModels" class="ghost">下载语音模型</button>
+  </section>
+
+  <section id="dlSection" class="dl hidden">
+    <div class="dl-row"><span id="dlName">模型</span><span id="dlPct">0%</span></div>
+    <div class="bar"><div id="dlBar" class="bar-fill"></div></div>
+  </section>
+
+  <section class="card">
+    <div class="card-title">快速通道</div>
+    <label class="switch-row">
+      <span>简单问题走快速通道(几秒回、便宜)</span>
+      <input type="checkbox" id="fastMode" checked>
+    </label>
+    <div class="hint">关闭后所有提问都开完整会话(慢、可动用工具)。复杂任务建议关闭。</div>
+  </section>
+
+  <section class="card">
+    <div class="card-title">最近问答</div>
+    <ul id="qaList" class="qa"><li class="empty">还没有对话</li></ul>
+  </section>
+
+  <section class="card">
+    <div class="card-title">状态日志</div>
+    <ul id="logList" class="qa logs"></ul>
+  </section>
+</main>
+<script src="/panel.js"></script>
+</body>
+</html>

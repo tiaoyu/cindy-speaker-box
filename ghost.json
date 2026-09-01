@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 3,
+  "minCindyVersion": "1.2.3",
+  "id": "earbud-speaker",
+  "name": "耳机智能音箱",
+  "description": "把蓝牙耳机变成智能音箱:说唤醒词(默认「嘿辛蒂」)提问,Cindy 思考后把口语化答案用本地语音播报回耳机。语音识别与语音合成全部本地离线运行,无需 API key;完整会话在侧边栏可回看。",
+  "whenToUse": "需要把蓝牙耳机当智能音箱用语音提问、让 Cindy 语音播报答案,或启动/停止语音聆听、用文字模拟一次语音问答时找我。",
+  "version": "1.0.0",
+  "entry": "main.js",
+  "icon": "assets/icon.png",
+  "command": "语音音箱",
+  "launch": "resident",
+  "tools": [
+    {
+      "name": "speaker_control",
+      "description": "控制耳机智能音箱。action=start 开始监听唤醒词(会启动本机麦克风录音,需语音模型已下载);action=stop 停止监听;action=status 查询当前状态(阶段/唤醒词/模型就绪);action=ask 用文字模拟一次语音问答(走完整链路:思考→本地TTS播报,不需要说话);action=configure 更新唤醒词与音量;action=download_models 后台下载语音模型(约600MB,仅首次需要)。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["start", "stop", "status", "ask", "configure", "download_models"],
+            "description": "要执行的控制动作"
+          },
+          "text": {
+            "type": "string",
+            "description": "action=ask 时必填:要提问的文字,原样透传用户原话"
+          },
+          "config": {
+            "type": "object",
+            "description": "action=configure 时传:{wakeWords:[\"嘿辛蒂\"], volume:1.0}",
+            "properties": {
+              "wakeWords": { "type": "array", "items": { "type": "string" }, "description": "唤醒词列表,可选值:嘿辛蒂/你好辛蒂/小辛蒂/嘿小辛/你好小辛" },
+              "volume": { "type": "number", "description": "播报音量 0.2~2.0" }
+            }
+          }
+        },
+        "required": ["action"]
+      }
+    }
+  ],
+  "agent": { "errand": true },
+  "cindy": { "text": ["oneshot"] },
+  "notify": true,
+  "fs": true,
+  "panel": {
+    "title": "耳机智能音箱",
+    "html": "panel.html",
+    "position": "left",
+    "minWidth": 260,
+    "defaultFraction": 0.22
+  },
+  "settingsHtml": "settings.html",
+  "node": {
+    "entry": "node/worker.cjs",
+    "protocol": "json-rpc-stdio",
+    "lifecycle": "resident"
+  }
+}
