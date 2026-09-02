@@ -25,6 +25,15 @@ function resolveSox() {
   }
   return null;
 }
+function soxMissingMessage() {
+  if (process.platform === 'win32') {
+    return '缺少随包 sox.exe(node/vendor/sox),无法录音播放。请确认插件已完整安装,或重新导入 .cindy 包';
+  }
+  if (process.platform === 'darwin') {
+    return '找不到 sox(录音/播放依赖)。macOS 请先安装: brew install sox';
+  }
+  return '找不到 sox(录音/播放依赖)。请用包管理器安装 sox,例如: sudo apt install sox';
+}
 const SOX = resolveSox();
 
 const DATA_DIR = process.platform === 'win32'
@@ -230,14 +239,181 @@ function enginesReady() {
   } catch { return false; }
 }
 
-// ---------------------------------------------------------------- sox 录音
+// ---------------------------------------------------------------- 音频设备
+
+function asDeviceList(v) {
+  if (!v) return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+function listWindowsWaveDevices() {
+  const script = [
+    '$ErrorActionPreference = "Stop"',
+    '$ProgressPreference = "SilentlyContinue"',
+    '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false',
+    'try {',
+    'Add-Type -TypeDefinition @"',
+    'using System;',
+    'using System.Runtime.InteropServices;',
+    'public static class EarbudWaveDev {',
+    '  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
+    '  public struct InCaps {',
+    '    public ushort wMid; public ushort wPid; public uint vDriverVersion;',
+    '    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szPname;',
+    '    public uint dwFormats; public ushort wChannels; public ushort wReserved1;',
+    '  }',
+    '  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
+    '  public struct OutCaps {',
+    '    public ushort wMid; public ushort wPid; public uint vDriverVersion;',
+    '    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szPname;',
+    '    public uint dwFormats; public ushort wChannels; public ushort wReserved1; public uint dwSupport;',
+    '  }',
+    '  [DllImport("winmm.dll", CharSet = CharSet.Unicode)] public static extern int waveInGetNumDevs();',
+    '  [DllImport("winmm.dll", CharSet = CharSet.Unicode)] public static extern int waveOutGetNumDevs();',
+    '  [DllImport("winmm.dll", CharSet = CharSet.Unicode)] public static extern int waveInGetDevCaps(uint id, out InCaps caps, uint size);',
+    '  [DllImport("winmm.dll", CharSet = CharSet.Unicode)] public static extern int waveOutGetDevCaps(uint id, out OutCaps caps, uint size);',
+    '}',
+    '"@',
+    '} catch {',
+    '  if ($_.Exception.Message -notmatch "already exists") { throw }',
+    '}',
+    '$inputs = @()',
+    'for ($i = 0; $i -lt [EarbudWaveDev]::waveInGetNumDevs(); $i++) {',
+    '  $c = New-Object EarbudWaveDev+InCaps',
+    '  [void][EarbudWaveDev]::waveInGetDevCaps([uint32]$i, [ref]$c, [uint32][Runtime.InteropServices.Marshal]::SizeOf($c))',
+    '  $n = [string]$c.szPname',
+    '  if (-not $n) { $n = [string]$i }',
+    '  $inputs += @{ id = $n; name = $n }',
+    '}',
+    '$outputs = @()',
+    'for ($i = 0; $i -lt [EarbudWaveDev]::waveOutGetNumDevs(); $i++) {',
+    '  $c = New-Object EarbudWaveDev+OutCaps',
+    '  [void][EarbudWaveDev]::waveOutGetDevCaps([uint32]$i, [ref]$c, [uint32][Runtime.InteropServices.Marshal]::SizeOf($c))',
+    '  $n = [string]$c.szPname',
+    '  if (-not $n) { $n = [string]$i }',
+    '  $outputs += @{ id = $n; name = $n }',
+    '}',
+    '@{ inputs = @($inputs); outputs = @($outputs) } | ConvertTo-Json -Compress -Depth 5',
+  ].join('\n');
+  const ps1 = path.join(os.tmpdir(), 'earbud-speaker-wave-devs.ps1');
+  fs.writeFileSync(ps1, script, 'utf8');
+  const out = execFileSync('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1,
+  ], { encoding: 'utf8', timeout: 20000, windowsHide: true, maxBuffer: 1024 * 1024 });
+  const text = String(out || '').replace(/^﻿/, '').trim();
+  const line = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('{')).pop();
+  if (!line) throw new Error('未得到设备列表');
+  const json = JSON.parse(line);
+  const norm = (d) => {
+    const id = String(d.id || d.name || '').trim();
+    const name = String(d.name || d.id || '').trim() || id;
+    return { id, name };
+  };
+  return {
+    inputs: asDeviceList(json.inputs).map(norm).filter((d) => d.id),
+    outputs: asDeviceList(json.outputs).map(norm).filter((d) => d.id),
+    driver: 'waveaudio',
+  };
+}
+
+function flagYes(v) {
+  if (v === true || v === 1) return true;
+  const s = String(v || '').toLowerCase();
+  return s === 'spaudio_yes' || s === 'yes' || s === 'true';
+}
+
+function walkAudioNodes(nodes, acc) {
+  for (const it of nodes || []) {
+    if (!it || typeof it !== 'object') continue;
+    if (Array.isArray(it._items)) walkAudioNodes(it._items, acc);
+    const name = String(it._name || '').trim();
+    if (!name) continue;
+    const inputish = flagYes(it.coreaudio_device_input) || it.coreaudio_input_source || it.coreaudio_default_audio_input_device;
+    const outputish = flagYes(it.coreaudio_device_output) || it.coreaudio_output_source || it.coreaudio_default_audio_output_device;
+    if (inputish) acc.inputs.push({ id: name, name });
+    if (outputish) acc.outputs.push({ id: name, name });
+  }
+}
+
+function listDarwinDevices() {
+  const bin = fs.existsSync('/usr/sbin/system_profiler') ? '/usr/sbin/system_profiler' : 'system_profiler';
+  const raw = execFileSync(bin, ['SPAudioDataType', '-json'], { encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+  const data = JSON.parse(raw);
+  const acc = { inputs: [], outputs: [] };
+  walkAudioNodes(data.SPAudioDataType || [], acc);
+  const uniq = (arr) => {
+    const seen = new Set();
+    return arr.filter((d) => {
+      if (seen.has(d.id)) return false;
+      seen.add(d.id);
+      return true;
+    });
+  };
+  return { inputs: uniq(acc.inputs), outputs: uniq(acc.outputs), driver: 'coreaudio' };
+}
+
+function parsePactlShort(text, kind) {
+  return String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const cols = line.split('\t');
+    const id = cols[1] || cols[0];
+    const name = cols[1] || cols[0];
+    return { id, name: name + (kind ? ` (${kind})` : '') };
+  }).filter((d) => d.id);
+}
+
+function listLinuxDevices() {
+  try {
+    const sources = execFileSync('pactl', ['list', 'short', 'sources'], { encoding: 'utf8', timeout: 8000 });
+    const sinks = execFileSync('pactl', ['list', 'short', 'sinks'], { encoding: 'utf8', timeout: 8000 });
+    return {
+      inputs: parsePactlShort(sources, 'source').filter((d) => !/\.monitor$/i.test(d.id)),
+      outputs: parsePactlShort(sinks, 'sink'),
+      driver: 'pulseaudio',
+    };
+  } catch { /* fall through to alsa */ }
+  const parseAlsa = (text, prefix) => {
+    const out = [];
+    let card = '';
+    for (const line of String(text || '').split(/\r?\n/)) {
+      const cm = line.match(/^card\s+(\d+):\s+(\S+)\s+\[([^\]]+)\]/i);
+      if (cm) { card = cm[1]; continue; }
+      const dm = line.match(/^(device|子设备)\s+(\d+):\s+([^\[]+)\[([^\]]+)\]/i) || line.match(/^device\s+(\d+):/i);
+      if (dm && card !== '') {
+        const dev = dm[1] || dm[2];
+        const id = `hw:${card},${dev}`;
+        out.push({ id, name: `${prefix} ${id}` });
+      }
+    }
+    return out;
+  };
+  let inputs = [];
+  let outputs = [];
+  try { inputs = parseAlsa(execFileSync('arecord', ['-l'], { encoding: 'utf8', timeout: 8000 }), '录音'); } catch { /* */ }
+  try { outputs = parseAlsa(execFileSync('aplay', ['-l'], { encoding: 'utf8', timeout: 8000 }), '播放'); } catch { /* */ }
+  return { inputs, outputs, driver: 'alsa' };
+}
+
+function listAudioDevices() {
+  try {
+    if (process.platform === 'win32') return listWindowsWaveDevices();
+    if (process.platform === 'darwin') return listDarwinDevices();
+    return listLinuxDevices();
+  } catch (e) {
+    log('枚举音频设备失败: ' + String(e && e.message || e).slice(0, 200));
+    return { inputs: [], outputs: [], driver: '', error: String(e && e.message || e).slice(0, 200) };
+  }
+}
+
+function soxDeviceArgs(device) {
+  if (!device) return ['-d'];
+  let driver = 'waveaudio';
+  if (process.platform === 'darwin') driver = 'coreaudio';
+  else if (process.platform !== 'win32') driver = String(device).startsWith('hw:') ? 'alsa' : 'pulseaudio';
+  return ['-t', driver, String(device)];
+}
 
 function soxRecArgs() {
-  const args = ['-q'];
-  if (state.config.inputDevice) args.push('-d', state.config.inputDevice);
-  else args.push('-d');
-  args.push('-t', 'raw', '-r', String(SR), '-c', '1', '-b', '16', '-e', 'signed-integer', '-');
-  return args;
+  return ['-q', ...soxDeviceArgs(state.config.inputDevice), '-t', 'raw', '-r', String(SR), '-c', '1', '-b', '16', '-e', 'signed-integer', '-'];
 }
 
 function startRec() {
@@ -246,7 +422,7 @@ function startRec() {
   const startedAt = Date.now();
   let gotData = false;
   child.on('error', (e) => {
-    log('录音进程启动失败: ' + e.message + '(请确认蓝牙耳机麦克风已连接并设为默认设备)');
+    log('录音进程启动失败: ' + e.message + '(请在插件设置里选择麦克风,或确认耳机已连接)');
     state.rec = null;
     notify('rec-error', { message: '录音进程启动失败: ' + e.message });
     setPhase('IDLE');
@@ -257,7 +433,7 @@ function startRec() {
     // 启动后极短时间内没收到任何音频就退出 = 打不开录音设备,如实上报而不是静默停在 IDLE
     if (!gotData && Date.now() - startedAt < 3000) {
       log('录音设备打开失败(退出码 ' + code + '):没有可用的麦克风输入设备');
-      notify('rec-error', { message: '没有可用的麦克风输入设备,请连接蓝牙耳机(或 USB 麦克风)并在系统设置中设为默认输入设备' });
+      notify('rec-error', { message: '没有可用的麦克风输入设备,请连接耳机并在插件设置里选择输入设备' });
       stopAll();
     }
   });
@@ -400,9 +576,11 @@ function beepPcm(freq, durMs, sr) {
 }
 
 function playRaw(pcmBuf, sr, volume, cb) {
-  const args = ['-q', '-v', String(Math.max(0.1, Math.min(2, volume)))];
-  if (state.config.outputDevice) args.push(state.config.outputDevice);
-  args.push('-t', 'raw', '-r', String(sr), '-c', '1', '-b', '16', '-e', 'signed-integer', '-', '-d');
+  const args = [
+    '-q', '-v', String(Math.max(0.1, Math.min(2, volume))),
+    '-t', 'raw', '-r', String(sr), '-c', '1', '-b', '16', '-e', 'signed-integer', '-',
+    ...soxDeviceArgs(state.config.outputDevice),
+  ];
   const child = spawn(SOX, args, { windowsHide: true });
   let done = false;
   const finish = (ok) => {
@@ -576,7 +754,7 @@ function applyAndStart() {
     return false;
   }
   if (!SOX || !fs.existsSync(SOX)) {
-    log('找不到 sox(录音/播放依赖)。请安装:brew install sox');
+    log(soxMissingMessage());
     setPhase('STOPPED');
     return false;
   }
@@ -611,18 +789,36 @@ const handlers = {
   init(params) {
     if (params && params.config) Object.assign(state.config, params.config);
     const ready = enginesReady();
-    return { ready, phase: state.phase, modelsDir: MODELS_DIR };
+    return { ready, phase: state.phase, modelsDir: MODELS_DIR, platform: process.platform };
   },
   configure(params) {
+    const prevWake = JSON.stringify(state.config.wakeWords || []);
+    const prevIn = state.config.inputDevice || '';
+    const prevOut = state.config.outputDevice || '';
     if (params && params.config) Object.assign(state.config, params.config);
     if (state.listening) {
-      // 重载唤醒词
-      state.engines = null; // 触发重建
-      try { state.rec && stopRec(); } catch { /* */ }
-      state.listening = applyAndStart();
+      const wakeChanged = JSON.stringify(state.config.wakeWords || []) !== prevWake;
+      const deviceChanged = (state.config.inputDevice || '') !== prevIn || (state.config.outputDevice || '') !== prevOut;
+      if (wakeChanged) state.engines = null; // 唤醒词变了才重建引擎
+      if (wakeChanged || deviceChanged) {
+        try { stopRec(); } catch { /* */ }
+        state.listening = applyAndStart();
+      }
       notify('state', { phase: state.phase, listening: state.listening });
     }
     return { ok: true, config: state.config };
+  },
+  listDevices() {
+    const listed = listAudioDevices();
+    return {
+      ok: !listed.error,
+      inputs: listed.inputs || [],
+      outputs: listed.outputs || [],
+      driver: listed.driver || '',
+      error: listed.error || '',
+      inputDevice: state.config.inputDevice || '',
+      outputDevice: state.config.outputDevice || '',
+    };
   },
   start() {
     state.listening = true;
@@ -639,7 +835,10 @@ const handlers = {
       listening: state.listening,
       modelsReady: enginesReady(),
       modelsDir: MODELS_DIR,
+      platform: process.platform,
       wakeWords: state.config.wakeWords,
+      inputDevice: state.config.inputDevice || '',
+      outputDevice: state.config.outputDevice || '',
       lastUtterance: state.lastUtterance,
     };
   },

@@ -10,7 +10,7 @@
         <option value="嘿小辛">嘿小辛</option>
         <option value="你好小辛">你好小辛</option>
       </select>
-      <div style="opacity:0.6;margin-top:4px;font-size:12px">换词需重启聆听生效</div>
+      <div style="opacity:0.6;margin-top:4px;font-size:12px">保存后立即生效；若正在聆听会自动重启监听</div>
     </div>
 
     <div>
@@ -23,9 +23,38 @@
       <input type="checkbox" id="autoStart">
     </label>
 
-    <div style="opacity:0.65;font-size:12px;line-height:1.6">
-      模型存放于 <code id="modelsDir" style="font-size:11px">%LOCALAPPDATA%\earbud-speaker\models</code>,
-      共约 600MB,首次使用自动下载。播放与录音走系统默认设备,请在 Windows 声音设置里把蓝牙耳机设为默认。
+    <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="font-weight:600">输入设备（麦克风）</div>
+        <button type="button" id="refreshDevices" style="background:transparent;color:inherit;border:1px solid var(--border-default,#e4e4e0);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:12px">刷新设备</button>
+      </div>
+      <select id="inputDevice" style="background:var(--surface,#fff);color:inherit;border:1px solid var(--border-default,#e4e4e0);border-radius:6px;padding:6px 10px;width:100%">
+        <option value="">系统默认输入</option>
+      </select>
+    </div>
+
+    <div>
+      <div style="font-weight:600;margin-bottom:6px">输出设备（耳机 / 扬声器）</div>
+      <select id="outputDevice" style="background:var(--surface,#fff);color:inherit;border:1px solid var(--border-default,#e4e4e0);border-radius:6px;padding:6px 10px;width:100%">
+        <option value="">系统默认输出</option>
+      </select>
+      <div id="deviceHint" style="opacity:0.6;margin-top:4px;font-size:12px">保存后立即用于录音和播报。列表为空时可点「刷新设备」。插拔耳机后请再刷新一次。</div>
+    </div>
+
+    <div style="opacity:0.85;font-size:12px;line-height:1.7;display:flex;flex-direction:column;gap:10px">
+      <div>
+        <div style="font-weight:600;margin-bottom:2px">模型目录</div>
+        <code id="modelsDir" style="font-size:11px;word-break:break-all">加载中…</code>
+        <div style="opacity:0.7;margin-top:2px">约 600MB，首次使用请在插件面板点「下载语音模型」。</div>
+      </div>
+      <div>
+        <div style="font-weight:600;margin-bottom:2px">声音设备</div>
+        <div id="soundHint" style="opacity:0.85"></div>
+      </div>
+      <div>
+        <div style="font-weight:600;margin-bottom:2px">麦克风权限</div>
+        <div id="micHint" style="opacity:0.85"></div>
+      </div>
     </div>
 
     <button id="save" style="align-self:flex-start;background:#2f6fed;color:#fff;border:none;border-radius:6px;padding:8px 18px;cursor:pointer;font-weight:600">保存设置</button>

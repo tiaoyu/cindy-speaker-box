@@ -90,6 +90,15 @@ async function saveKv(patch) {
   } catch { /* 忽略状态保存失败 */ }
 }
 
+function speakerConfigFromPrefs(prefs) {
+  return {
+    wakeWords: prefs.wakeWords || ['嘿辛蒂'],
+    volume: prefs.volume ?? 1.0,
+    inputDevice: String(prefs.inputDevice || ''),
+    outputDevice: String(prefs.outputDevice || ''),
+  };
+}
+
 function history() {
   const H = [];
   const push = (role, text) => {
@@ -213,6 +222,19 @@ try {
   const chIn = new BroadcastChannel(CH_NAME);
   chIn.addEventListener('message', async (ev) => {
     const m = ev.data || {};
+    if (m.type === 'settings-changed') {
+      try {
+        const prefs = await loadKv();
+        await cindy.node.request({
+          method: 'configure',
+          params: { config: speakerConfigFromPrefs(prefs) },
+          timeoutMs: 30000,
+        });
+      } catch (e) {
+        log('应用设置失败: ' + (e && e.message));
+      }
+      return;
+    }
     if (m.type !== 'panel-action' || !m.reqId || seenReq.has(m.reqId)) return;
     seenReq.add(m.reqId);
     if (seenReq.size > 200) seenReq.clear();
@@ -236,12 +258,19 @@ try {
         const prefs = await loadKv();
         await cindy.node.request({
           method: 'configure',
-          params: { config: { wakeWords: prefs.wakeWords || ['嘿辛蒂'], volume: prefs.volume ?? 1.0 } },
+          params: { config: speakerConfigFromPrefs(prefs) },
           timeoutMs: 30000,
         });
+      } else if (m.action === 'list-devices') {
+        const r = await cindy.node.request({ method: 'listDevices', params: {}, timeoutMs: 30000 });
+        const devices = r.result || {};
+        await saveKv({ audioDevices: { inputs: devices.inputs || [], outputs: devices.outputs || [], driver: devices.driver || '' } });
+        reply({ type: 'ok', devices });
+        return;
       } else if (m.action === 'sync') {
         const r = await cindy.node.request({ method: 'status', params: {} });
         if (r.ok && r.result) {
+          await saveKv({ modelsDir: r.result.modelsDir, platform: r.result.platform });
           broadcast({ type: 'state', phase: r.result.phase, listening: r.result.listening });
           broadcast({ type: 'init', ready: r.result.modelsReady, modelsDir: r.result.modelsDir });
           if (r.result.lastUtterance) broadcast({ type: 'thinking', text: r.result.lastUtterance.text });
@@ -260,10 +289,11 @@ try {
     const prefs = await loadKv();
     const r = await cindy.node.request({
       method: 'init',
-      params: { config: { wakeWords: prefs.wakeWords || ['嘿辛蒂'], volume: prefs.volume ?? 1.0 } },
+      params: { config: speakerConfigFromPrefs(prefs) },
       timeoutMs: 30000,
     });
     if (r.ok && r.result) {
+      await saveKv({ modelsDir: r.result.modelsDir, platform: r.result.platform });
       broadcast({ type: 'init', ready: r.result.ready, modelsDir: r.result.modelsDir, phase: r.result.phase });
       if (prefs.autoStart && r.result.ready) {
         await cindy.node.request({ method: 'start', params: {}, timeoutMs: 30000 });
