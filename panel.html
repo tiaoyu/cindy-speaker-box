@@ -19,6 +19,13 @@
     <button id="btnModels" class="ghost">下载语音模型</button>
   </section>
 
+  <section class="card">
+    <div class="card-title">唤醒词自测</div>
+    <input id="wakeFile" type="file" accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac" class="hidden">
+    <button id="btnWakeTest" class="ghost" type="button">选择音频测唤醒词</button>
+    <div id="wakeTestResult" class="hint">用含「嘿辛蒂」的录音检测 KWS 是否能命中，不走对话、不占用麦克风。</div>
+  </section>
+
   <section id="dlSection" class="dl hidden">
     <div class="dl-row"><span id="dlName">模型</span><span id="dlPct">0%</span></div>
     <div class="bar"><div id="dlBar" class="bar-fill"></div></div>

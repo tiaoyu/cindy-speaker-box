@@ -97,6 +97,8 @@ sox --version
 
 缺少 SoX 或打不开麦克风时，插件会停止聆听并弹出错误，而不会假装仍在待命。
 
+可用一段含唤醒词的录音自测，不必对着麦克风说：面板点「选择音频测唤醒词」，或让 Agent 调用 `speaker_control` 的 `action=test_wake` 并传入本机 `filePath`。只跑 KWS，不走对话。
+
 ## 设置项
 
 | 设置 | 说明 |

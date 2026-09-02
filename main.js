@@ -42,7 +42,8 @@ cindy.onHostMessage(async function (msg) {
     const action = String(msg.args.action || 'status');
     try {
       if (action === 'start') {
-        const r = await cindy.node.request({ method: 'start', params: {}, timeoutMs: 30000 });
+        const prefs = await loadKv();
+        const r = await cindy.node.request({ method: 'start', params: { config: speakerConfigFromPrefs(prefs) }, timeoutMs: 30000 });
         cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: r.result || r });
       } else if (action === 'stop') {
         const r = await cindy.node.request({ method: 'stop', params: {} });
@@ -62,8 +63,13 @@ cindy.onHostMessage(async function (msg) {
       } else if (action === 'download_models') {
         await cindy.node.request({ method: 'downloadModels', params: {} });
         cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: { started: true, note: '模型下载已在后台进行' } });
+      } else if (action === 'test_wake') {
+        const filePath = String(msg.args.filePath || '').trim();
+        if (!filePath) throw new Error('filePath 不能为空');
+        const r = await cindy.node.request({ method: 'testWakeFile', params: { filePath }, timeoutMs: 60000 });
+        cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: r.result || r });
       } else {
-        cindy.send({ type: 'tool-result', callId: msg.callId, ok: false, errorCode: 'BAD_ACTION', message: 'action 只支持 start/stop/status/ask/configure/download_models' });
+        cindy.send({ type: 'tool-result', callId: msg.callId, ok: false, errorCode: 'BAD_ACTION', message: 'action 只支持 start/stop/status/ask/configure/download_models/test_wake' });
       }
     } catch (e) {
       cindy.send({ type: 'tool-result', callId: msg.callId, ok: false, errorCode: 'NODE_ERROR', message: String(e && e.message || e).slice(0, 300) + '。若提示模型未就绪,可让用户在插件面板点「下载语音模型」。' });
@@ -246,8 +252,13 @@ try {
     try {
       if (m.action === 'start') {
         await saveKv({ autoStart: true });
-        const r = await cindy.node.request({ method: 'start', params: {}, timeoutMs: 30000 });
-        broadcast({ type: 'state', phase: r.result && r.result.phase || 'IDLE', listening: true });
+        const prefs = await loadKv();
+        const r = await cindy.node.request({
+          method: 'start',
+          params: { config: speakerConfigFromPrefs(prefs) },
+          timeoutMs: 30000,
+        });
+        broadcast({ type: 'state', phase: r.result && r.result.phase || 'IDLE', listening: !!r.result && r.result.ok !== false });
       } else if (m.action === 'stop') {
         await saveKv({ autoStart: false });
         await cindy.node.request({ method: 'stop', params: {} });
@@ -266,6 +277,35 @@ try {
         const devices = r.result || {};
         await saveKv({ audioDevices: { inputs: devices.inputs || [], outputs: devices.outputs || [], driver: devices.driver || '' } });
         reply({ type: 'ok', devices });
+        return;
+      } else if (m.action === 'test-wake') {
+        let result;
+        if (m.audioBase64) {
+          const id = 'w' + Date.now().toString(36);
+          const b64 = String(m.audioBase64);
+          await cindy.node.request({ method: 'wakeTestBegin', params: { id, filename: m.filename }, timeoutMs: 15000 });
+          const CHUNK = 120000;
+          for (let i = 0; i < b64.length; i += CHUNK) {
+            const part = await cindy.node.request({
+              method: 'wakeTestChunk',
+              params: { id, data: b64.slice(i, i + CHUNK) },
+              timeoutMs: 15000,
+            });
+            if (part && part.ok === false) throw new Error(part.message || '分片上传失败');
+            if (part && part.result && part.result.ok === false) throw new Error(part.result.message || '分片上传失败');
+          }
+          const r = await cindy.node.request({ method: 'wakeTestFinish', params: { id }, timeoutMs: 60000 });
+          result = r.result || r;
+        } else {
+          const r = await cindy.node.request({
+            method: 'testWakeFile',
+            params: { filePath: m.filePath },
+            timeoutMs: 60000,
+          });
+          result = r.result || r;
+        }
+        broadcast({ type: 'wake-test', result });
+        reply({ type: 'ok', result });
         return;
       } else if (m.action === 'sync') {
         const r = await cindy.node.request({ method: 'status', params: {} });
@@ -296,7 +336,7 @@ try {
       await saveKv({ modelsDir: r.result.modelsDir, platform: r.result.platform });
       broadcast({ type: 'init', ready: r.result.ready, modelsDir: r.result.modelsDir, phase: r.result.phase });
       if (prefs.autoStart && r.result.ready) {
-        await cindy.node.request({ method: 'start', params: {}, timeoutMs: 30000 });
+        await cindy.node.request({ method: 'start', params: { config: speakerConfigFromPrefs(prefs) }, timeoutMs: 30000 });
       }
     }
   } catch (e) {

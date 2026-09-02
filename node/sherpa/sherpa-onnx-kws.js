@@ -314,10 +314,21 @@ class Kws {
 
   getResult(stream) {
     let r = this.Module._SherpaOnnxGetKeywordResult(this.handle, stream.handle);
-    let jsonPtr = this.Module.getValue(r + 24, 'i8*');
-    let json = this.Module.UTF8ToString(jsonPtr);
+    // WASM 1.13.6 的 json 字段偏移与当前 C 结构体不一致,keyword 永远是空串。
+    // 直接读 SherpaOnnxKeywordResult.keyword(第一个 char*)。
+    let keyword = '';
+    try {
+      const keywordPtr = this.Module.getValue(r, 'i8*');
+      if (keywordPtr) keyword = this.Module.UTF8ToString(keywordPtr);
+    } catch { /* */ }
+    let parsed = {};
+    try {
+      const jsonPtr = this.Module.getValue(r + 24, 'i8*');
+      if (jsonPtr) parsed = JSON.parse(this.Module.UTF8ToString(jsonPtr) || '{}');
+    } catch { parsed = {}; }
     this.Module._SherpaOnnxDestroyKeywordResult(r);
-    return JSON.parse(json);
+    if (keyword) parsed.keyword = keyword;
+    return parsed;
   }
 }
 

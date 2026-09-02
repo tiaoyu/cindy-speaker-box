@@ -93,8 +93,31 @@ function sendToBrain(data, onReply, timeoutMs = 3000) {
 }
 
 // 面板命令(经广播交给电子脑执行)
-function requestAction(action) {
-  wakeBrain().then(() => sendToBrain({ type: 'panel-action', action }));
+function requestAction(action, extra, timeoutMs) {
+  wakeBrain().then(() => sendToBrain(Object.assign({ type: 'panel-action', action }, extra || {}), extra ? ((reply) => {
+    if (reply && reply.type === 'ok' && reply.result) showWakeTest(reply.result);
+    else if (reply && reply.type === 'error') showWakeTest({ ok: false, message: reply.message });
+    else if (reply && reply.type === 'timeout') showWakeTest({ ok: false, message: '检测超时,请换更短的音频再试' });
+  }) : undefined, timeoutMs));
+}
+
+function showWakeTest(result) {
+  const el = $('#wakeTestResult');
+  if (!result || result.ok === false) {
+    el.textContent = '检测失败: ' + String((result && result.message) || '未知错误');
+    return;
+  }
+  const names = (result.keywords || []).filter(Boolean);
+  if (result.triggered && names.length) {
+    el.textContent = '已触发唤醒词: ' + names.join(' / ') + '（' + result.durationMs + 'ms）';
+    addLog('唤醒自测命中: ' + names.join(' / '));
+  } else if (result.triggered) {
+    el.textContent = '已触发唤醒词（' + result.durationMs + 'ms）';
+    addLog('唤醒自测命中');
+  } else {
+    el.textContent = '未触发。请确认录音里有当前唤醒词（如「嘿辛蒂」），时长建议 1~5 秒。';
+    addLog('唤醒自测未命中');
+  }
 }
 
 // ---------- 事件绑定 ----------
@@ -104,6 +127,23 @@ $('#btnToggle').addEventListener('click', () => {
 $('#btnModels').addEventListener('click', () => {
   $('#dlSection').classList.remove('hidden');
   requestAction('download_models');
+});
+$('#btnWakeTest').addEventListener('click', () => $('#wakeFile').click());
+$('#wakeFile').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    showWakeTest({ ok: false, message: '请用小于 8MB 的音频(建议 1~5 秒 wav/mp3)' });
+    return;
+  }
+  $('#wakeTestResult').textContent = '正在检测「' + file.name + '」…';
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const audioBase64 = btoa(bin);
+  requestAction('test-wake', { audioBase64, filename: file.name }, 60000);
 });
 $('#fastMode').addEventListener('change', (e) => {
   writeKv({ fastMode: e.target.checked });
@@ -150,6 +190,12 @@ ch.addEventListener('message', (ev) => {
       break;
     case 'error':
       addLog('错误: ' + m.message);
+      break;
+    case 'wake-test':
+      showWakeTest(m.result);
+      break;
+    case 'rec-error':
+      addLog('录音错误: ' + m.message);
       break;
   }
 });

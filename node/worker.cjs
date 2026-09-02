@@ -118,6 +118,7 @@ const state = {
   speakChild: null,
   downloading: false,
   lastUtterance: null,
+  wakeUploads: Object.create(null),
 };
 
 const SR = 16000;
@@ -138,6 +139,81 @@ function loadWasm() {
 
 const T = (p) => p.replace(/\\/g, '/'); // wasm 内部 fopen 需要 / 路径
 
+// 唤醒词: 内置候选词表(拼音已按声母/韵母分离,全部校验过能命中 tokens.txt)
+const WAKE_PINYIN = {
+  '嘿辛蒂': 'h ēi x īn d ì @嘿辛蒂',
+  '你好辛蒂': 'n ǐ h ǎo x īn d ì @你好辛蒂',
+  '小辛蒂': 'x iǎo x īn d ì @小辛蒂',
+  '嘿小辛': 'h ēi x iǎo x īn @嘿小辛',
+  '你好小辛': 'n ǐ h ǎo x iǎo x īn @你好小辛',
+};
+
+function kwsKeywordLines() {
+  const kwLines = [];
+  for (const w of state.config.wakeWords) {
+    const py = WAKE_PINYIN[w];
+    if (py) kwLines.push(py);
+    else log(`唤醒词「${w}」暂不支持,已跳过。可选:${Object.keys(WAKE_PINYIN).join('/')}`);
+  }
+  if (!kwLines.length) kwLines.push(WAKE_PINYIN['嘿辛蒂']);
+  return kwLines;
+}
+
+function kwsKeywordText(extraLines) {
+  const lines = kwsKeywordLines().concat(Array.isArray(extraLines) ? extraLines : []);
+  const seen = new Set();
+  const uniq = [];
+  for (const line of lines) {
+    const s = String(line || '').trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    uniq.push(s);
+  }
+  return uniq.join('\n') + '\n';
+}
+
+function kwsCreateConfig(kwsDir, keywords) {
+  return {
+    featConfig: { samplingRate: SR, featureDim: 80 },
+    modelConfig: {
+      transducer: {
+        encoder: `${kwsDir}/encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx`,
+        decoder: `${kwsDir}/decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx`,
+        joiner: `${kwsDir}/joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx`,
+      },
+      tokens: `${kwsDir}/tokens.txt`,
+      numThreads: 1, provider: 'cpu', debug: 0, modelingUnit: 'cjkchar',
+    },
+    keywords,
+    maxActivePaths: 4, numTrailingBlanks: 1, keywordsScore: 1.0, keywordsThreshold: 0.25,
+  };
+}
+
+function officialTestKeywordLines() {
+  const p = path.join(MODELS.kws.dir, MODELS.kws.topDirName, 'test_wavs', 'test_keywords.txt');
+  try {
+    return fs.readFileSync(p, 'utf8').replace(/\r/g, '').split('\n').map((s) => s.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function withTempKws(keywords, fn) {
+  const kwsMod = require(path.join(SHERPA, 'sherpa-onnx-kws.js'));
+  const kwsDir = T(path.join(MODELS.kws.dir, MODELS.kws.topDirName));
+  const kws = kwsMod.createKws(loadWasm(), kwsCreateConfig(kwsDir, keywords));
+  const prev = state.engines && state.engines.kws;
+  if (!state.engines) state.engines = {};
+  state.engines.kws = kws;
+  try {
+    return fn();
+  } finally {
+    if (prev) state.engines.kws = prev;
+    else delete state.engines.kws;
+    try { kws.free(); } catch { /* */ }
+  }
+}
+
 function buildEngines() {
   const m = loadWasm();
   const kwsMod = require(path.join(SHERPA, 'sherpa-onnx-kws.js'));
@@ -151,37 +227,7 @@ function buildEngines() {
   const vadModel = T(path.join(MODELS.vad.dir, MODELS.vad.tarName));
 
   const engines = {};
-
-  // 唤醒词: 内置候选词表(拼音已按声母/韵母分离,全部校验过能命中 tokens.txt)
-  const WAKE_PINYIN = {
-    '嘿辛蒂': 'h ēi x īn d ì @嘿辛蒂',
-    '你好辛蒂': 'n ǐ h ǎo x īn d ì @你好辛蒂',
-    '小辛蒂': 'x iǎo x īn d ì @小辛蒂',
-    '嘿小辛': 'h ēi x iǎo x īn @嘿小辛',
-    '你好小辛': 'n ǐ h ǎo x iǎo x īn @你好小辛',
-  };
-  const kwLines = [];
-  for (const w of state.config.wakeWords) {
-    const py = WAKE_PINYIN[w];
-    if (py) kwLines.push(py);
-    else log(`唤醒词「${w}」暂不支持,已跳过。可选:${Object.keys(WAKE_PINYIN).join('/')}`);
-  }
-  if (!kwLines.length) kwLines.push(WAKE_PINYIN['嘿辛蒂']);
-
-  engines.kws = kwsMod.createKws(m, {
-    featConfig: { samplingRate: SR, featureDim: 80 },
-    modelConfig: {
-      transducer: {
-        encoder: `${kwsDir}/encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx`,
-        decoder: `${kwsDir}/decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx`,
-        joiner: `${kwsDir}/joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx`,
-      },
-      tokens: `${kwsDir}/tokens.txt`,
-      numThreads: 1, provider: 'cpu', debug: 0, modelingUnit: 'cjkchar',
-    },
-    keywords: kwLines.join('\n') + '\n',
-    maxActivePaths: 4, numTrailingBlanks: 1, keywordsScore: 1.0, keywordsThreshold: 0.25,
-  });
+  engines.kws = kwsMod.createKws(m, kwsCreateConfig(kwsDir, kwsKeywordText()));
 
   engines.asr = asrMod.createOnlineRecognizer(m, {
     modelConfig: {
@@ -404,12 +450,28 @@ function listAudioDevices() {
   }
 }
 
+function soxAudioDriver() {
+  if (process.platform === 'win32') return 'waveaudio';
+  if (process.platform === 'darwin') return 'coreaudio';
+  return null;
+}
+
 function soxDeviceArgs(device) {
-  if (!device) return ['-d'];
-  let driver = 'waveaudio';
-  if (process.platform === 'darwin') driver = 'coreaudio';
-  else if (process.platform !== 'win32') driver = String(device).startsWith('hw:') ? 'alsa' : 'pulseaudio';
-  return ['-t', driver, String(device)];
+  const name = String(device || '').trim();
+  const driver = soxAudioDriver() || (name.startsWith('hw:') ? 'alsa' : (name ? 'pulseaudio' : null));
+  // 随包 Windows sox 只编了 waveaudio:裸 -d 会报 "no default audio device configured"
+  if (!name) return driver ? ['-t', driver, '-d'] : ['-d'];
+  return driver ? ['-t', driver, name] : ['-d'];
+}
+
+function soxFailHint(stderr) {
+  const s = String(stderr || '').replace(/\s+/g, ' ').trim();
+  if (/no default audio device/i.test(s)) return 'SoX 打不开系统默认录音设备,请在插件设置里明确选择麦克风后保存';
+  if (/not found/i.test(s) || /can't open input/i.test(s)) return '所选麦克风打不开,请刷新设备列表后重新选择并保存';
+  if (/can not open audio device/i.test(s)) return '无法打开音频设备,请检查耳机是否连接,并在插件设置里选择输入设备';
+  const m = s.match(/FAIL[^\n]{0,160}/i);
+  if (m) return m[0].slice(0, 180);
+  return s.slice(0, 180);
 }
 
 function soxRecArgs() {
@@ -418,9 +480,12 @@ function soxRecArgs() {
 
 function startRec() {
   if (state.rec) return;
-  const child = spawn(SOX, soxRecArgs(), { windowsHide: true });
+  const args = soxRecArgs();
+  log('录音: sox ' + args.join(' '));
+  const child = spawn(SOX, args, { windowsHide: true });
   const startedAt = Date.now();
   let gotData = false;
+  let errBuf = '';
   child.on('error', (e) => {
     log('录音进程启动失败: ' + e.message + '(请在插件设置里选择麦克风,或确认耳机已连接)');
     state.rec = null;
@@ -432,12 +497,16 @@ function startRec() {
     state.rec = null;
     // 启动后极短时间内没收到任何音频就退出 = 打不开录音设备,如实上报而不是静默停在 IDLE
     if (!gotData && Date.now() - startedAt < 3000) {
-      log('录音设备打开失败(退出码 ' + code + '):没有可用的麦克风输入设备');
-      notify('rec-error', { message: '没有可用的麦克风输入设备,请连接耳机并在插件设置里选择输入设备' });
+      const hint = soxFailHint(errBuf) || ('没有可用的麦克风输入设备(退出码 ' + code + ')');
+      log('录音设备打开失败: ' + hint);
+      notify('rec-error', { message: hint });
       stopAll();
     }
   });
-  child.stderr.on('data', (d) => { /* sox stderr 忽略,避免噪声 */ });
+  child.stderr.on('data', (d) => {
+    errBuf += String(d || '');
+    if (errBuf.length > 1000) errBuf = errBuf.slice(-1000);
+  });
   child.stdout.on('data', (chunk) => { gotData = true; onPcm(chunk); });
   state.rec = child;
 }
@@ -590,15 +659,13 @@ function playRaw(pcmBuf, sr, volume, cb) {
     cb && cb(ok);
   };
   child.on('error', (e) => { log('播放失败: ' + e.message); finish(false); });
-  // 播放设备打不开时 sox 会立刻退出:cb(true) 会把状态机带回 IDLE,但要能暴露问题
   child.stderr.on('data', (d) => {
     const s = String(d || '');
-    if (s.includes('can not open audio device')) {
-      log('播放设备打开失败:没有可用的音频输出设备(请连接耳机/扬声器)');
+    if (/no default audio device|can not open audio device|can't open output|not found/i.test(s)) {
+      log('播放设备打开失败: ' + soxFailHint(s));
     }
   });
   child.on('exit', () => finish(true));
-  child.stderr.on('data', () => { /* ignore */ });
   state.speakChild = child;
   child.stdin.end(pcmBuf);
 }
@@ -747,9 +814,188 @@ function setPhase(p) {
   notify('state', { phase: p, listening: state.listening });
 }
 
-function applyAndStart() {
+function ensureEngines() {
   if (!enginesReady()) {
     notify('need-models', {});
+    return { ok: false, message: '语音模型未就绪,请先在面板点「下载语音模型」' };
+  }
+  if (!state.engines) {
+    log('加载语音引擎(首次约 2-5 秒)...');
+    try {
+      state.engines = buildEngines();
+    } catch (e) {
+      const message = '引擎加载失败: ' + String(e && e.message).slice(0, 300);
+      log(message);
+      state.engines = null;
+      return { ok: false, message };
+    }
+  }
+  return { ok: true };
+}
+
+function convertToPcm16k(srcPath) {
+  if (!SOX || !fs.existsSync(SOX)) throw new Error(soxMissingMessage());
+  const dest = path.join(os.tmpdir(), 'earbud-wake-test-' + Date.now() + '.raw');
+  try {
+    execFileSync(SOX, [
+      srcPath,
+      '-t', 'raw', '-r', String(SR), '-c', '1', '-b', '16', '-e', 'signed-integer',
+      dest,
+    ], { stdio: 'pipe', timeout: 30000, windowsHide: true });
+    const buf = fs.readFileSync(dest);
+    const maxBytes = SR * 2 * 30; // 最多测 30 秒
+    return buf.length > maxBytes ? buf.subarray(0, maxBytes) : buf;
+  } finally {
+    try { fs.unlinkSync(dest); } catch { /* */ }
+  }
+}
+
+function consumeKwsHits(stream, keywords, seen) {
+  const kws = state.engines.kws;
+  while (kws.isReady(stream)) kws.decode(stream);
+  const r = kws.getResult(stream);
+  if (r && r.keyword) {
+    const kw = String(r.keyword);
+    if (kw && !seen.has(kw)) {
+      seen.add(kw);
+      keywords.push(kw);
+    }
+    kws.reset(stream);
+    return true;
+  }
+  return false;
+}
+
+function scanWakeKeywords(pcm) {
+  const stream = state.engines.kws.createStream();
+  const keywords = [];
+  const seen = new Set();
+  try {
+    const bytes = KWS_FRAME * 2;
+    for (let off = 0; off + bytes <= pcm.length; off += bytes) {
+      stream.acceptWaveform(SR, feedFloat32(pcm.subarray(off, off + bytes)));
+      consumeKwsHits(stream, keywords, seen);
+    }
+    const rem = pcm.length % bytes;
+    if (rem >= 2) {
+      const last = Buffer.alloc(bytes);
+      pcm.copy(last, 0, pcm.length - rem);
+      stream.acceptWaveform(SR, feedFloat32(last));
+      consumeKwsHits(stream, keywords, seen);
+    }
+    // 尾部补 0.8s 静音,让 trailing blank 触发(短录音否则可能憋在解码器里)
+    const silence = new Float32Array(Math.round(SR * 0.8));
+    stream.acceptWaveform(SR, silence);
+    consumeKwsHits(stream, keywords, seen);
+    try { stream.inputFinished(); } catch { /* */ }
+    consumeKwsHits(stream, keywords, seen);
+  } finally {
+    try { stream.free(); } catch { /* */ }
+  }
+  return keywords;
+}
+
+function testWakeFromPath(src, displayName) {
+  const ready = ensureEngines();
+  if (!ready.ok) return ready;
+  if (!src) return { ok: false, message: '请提供音频文件路径或上传音频内容' };
+  if (!fs.existsSync(src)) return { ok: false, message: '找不到音频文件: ' + src };
+  let pcm;
+  try {
+    pcm = convertToPcm16k(src);
+  } catch (e) {
+    return { ok: false, message: '音频转码失败: ' + String(e && e.message || e).slice(0, 200) };
+  }
+  if (!pcm || pcm.length < KWS_FRAME * 2) {
+    return { ok: false, message: '转码后音频太短,无法检测唤醒词' };
+  }
+  const extra = officialTestKeywordLines();
+  const keywords = extra.length
+    ? withTempKws(kwsKeywordText(extra), () => scanWakeKeywords(pcm))
+    : scanWakeKeywords(pcm);
+  const durationMs = Math.round((pcm.length / 2) / SR * 1000);
+  const result = {
+    ok: true,
+    triggered: keywords.length > 0,
+    keywords,
+    durationMs,
+    bytes: pcm.length,
+    file: displayName || path.basename(src),
+  };
+  log(result.triggered
+    ? ('唤醒词自测命中: ' + keywords.join('/') + ' (' + durationMs + 'ms)')
+    : ('唤醒词自测未命中 (' + durationMs + 'ms, 当前词: ' + (state.config.wakeWords || []).join('/') + ')'));
+  return result;
+}
+
+function testWakeFile(params) {
+  let src = String((params && params.filePath) || '').trim();
+  let tmpSrc = '';
+  if (!src && params && params.audioBase64) {
+    const rawName = String(params.filename || 'wake-test.wav');
+    const filename = rawName.replace(/[^a-zA-Z0-9._\-一-龥]/g, '_').slice(0, 80) || 'wake-test.wav';
+    tmpSrc = path.join(os.tmpdir(), 'earbud-wake-src-' + Date.now() + '-' + filename);
+    let buf;
+    try {
+      buf = Buffer.from(String(params.audioBase64), 'base64');
+    } catch {
+      return { ok: false, message: '音频内容不是合法的 base64' };
+    }
+    if (!buf.length) return { ok: false, message: '音频内容为空' };
+    if (buf.length > 20 * 1024 * 1024) return { ok: false, message: '音频超过 20MB,请剪短后再测' };
+    fs.writeFileSync(tmpSrc, buf);
+    src = tmpSrc;
+  }
+  try {
+    return testWakeFromPath(src, params && params.filename);
+  } finally {
+    if (tmpSrc) try { fs.unlinkSync(tmpSrc); } catch { /* */ }
+  }
+}
+
+function wakeTestBegin(params) {
+  const id = String((params && params.id) || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+  if (!id) return { ok: false, message: '缺少上传 id' };
+  const rawName = String((params && params.filename) || 'wake-test.wav');
+  const filename = rawName.replace(/[^a-zA-Z0-9._\-一-龥]/g, '_').slice(0, 80) || 'wake-test.wav';
+  const filePath = path.join(os.tmpdir(), 'earbud-wake-up-' + id + '-' + filename);
+  try { fs.unlinkSync(filePath); } catch { /* */ }
+  state.wakeUploads[id] = { filePath, filename, bytes: 0 };
+  return { ok: true, id };
+}
+
+function wakeTestChunk(params) {
+  const id = String((params && params.id) || '');
+  const up = state.wakeUploads[id];
+  if (!up) return { ok: false, message: '上传会话不存在,请重新选择文件' };
+  let buf;
+  try {
+    buf = Buffer.from(String((params && params.data) || ''), 'base64');
+  } catch {
+    return { ok: false, message: '分片不是合法的 base64' };
+  }
+  if (!buf.length) return { ok: true, bytes: up.bytes };
+  if (up.bytes + buf.length > 20 * 1024 * 1024) return { ok: false, message: '音频超过 20MB,请剪短后再测' };
+  fs.appendFileSync(up.filePath, buf);
+  up.bytes += buf.length;
+  return { ok: true, bytes: up.bytes };
+}
+
+function wakeTestFinish(params) {
+  const id = String((params && params.id) || '');
+  const up = state.wakeUploads[id];
+  delete state.wakeUploads[id];
+  if (!up) return { ok: false, message: '上传会话不存在,请重新选择文件' };
+  try {
+    return testWakeFromPath(up.filePath, up.filename);
+  } finally {
+    try { fs.unlinkSync(up.filePath); } catch { /* */ }
+  }
+}
+
+function applyAndStart() {
+  const ready = ensureEngines();
+  if (!ready.ok) {
     setPhase('STOPPED');
     return false;
   }
@@ -757,17 +1003,6 @@ function applyAndStart() {
     log(soxMissingMessage());
     setPhase('STOPPED');
     return false;
-  }
-  if (!state.engines) {
-    log('加载语音引擎(首次约 2-5 秒)...');
-    try {
-      state.engines = buildEngines();
-    } catch (e) {
-      log('引擎加载失败: ' + String(e && e.message).slice(0, 300));
-      state.engines = null;
-      setPhase('STOPPED');
-      return false;
-    }
   }
   resetKws();
   resetAsr();
@@ -820,10 +1055,11 @@ const handlers = {
       outputDevice: state.config.outputDevice || '',
     };
   },
-  start() {
+  start(params) {
+    if (params && params.config) Object.assign(state.config, params.config);
     state.listening = true;
     const ok = applyAndStart();
-    return { ok, phase: state.phase };
+    return { ok, phase: state.phase, inputDevice: state.config.inputDevice || '', outputDevice: state.config.outputDevice || '' };
   },
   stop() {
     stopAll();
@@ -859,6 +1095,18 @@ const handlers = {
     setPhase('THINKING');
     notify('utterance', { text });
     return { ok: true };
+  },
+  testWakeFile(params) {
+    return testWakeFile(params || {});
+  },
+  wakeTestBegin(params) {
+    return wakeTestBegin(params || {});
+  },
+  wakeTestChunk(params) {
+    return wakeTestChunk(params || {});
+  },
+  wakeTestFinish(params) {
+    return wakeTestFinish(params || {});
   },
   downloadModels() {
     downloadModels((err) => {

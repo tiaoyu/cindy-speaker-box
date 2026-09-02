@@ -13,18 +13,22 @@
   "tools": [
     {
       "name": "speaker_control",
-      "description": "控制耳机智能音箱。action=start 开始监听唤醒词(会启动本机麦克风录音,需语音模型已下载);action=stop 停止监听;action=status 查询当前状态(阶段/唤醒词/模型就绪/当前输入输出设备);action=ask 用文字模拟一次语音问答(走完整链路:思考→本地TTS播报,不需要说话);action=configure 更新唤醒词、音量与输入/输出设备;action=download_models 后台下载语音模型(约600MB,仅首次需要)。",
+      "description": "控制耳机智能音箱。action=start 开始监听唤醒词(会启动本机麦克风录音,需语音模型已下载);action=stop 停止监听;action=status 查询当前状态(阶段/唤醒词/模型就绪/当前输入输出设备);action=ask 用文字模拟一次语音问答(走完整链路:思考→本地TTS播报,不需要说话);action=configure 更新唤醒词、音量与输入/输出设备;action=download_models 后台下载语音模型(约600MB,仅首次需要);action=test_wake 用本地音频文件检测唤醒词(只跑 KWS,不走对话)。",
       "parameters": {
         "type": "object",
         "properties": {
           "action": {
             "type": "string",
-            "enum": ["start", "stop", "status", "ask", "configure", "download_models"],
+            "enum": ["start", "stop", "status", "ask", "configure", "download_models", "test_wake"],
             "description": "要执行的控制动作"
           },
           "text": {
             "type": "string",
             "description": "action=ask 时必填:要提问的文字,原样透传用户原话"
+          },
+          "filePath": {
+            "type": "string",
+            "description": "action=test_wake 时必填:本机音频文件绝对路径(wav/mp3/ogg/flac 等,sox 能解码即可)"
           },
           "config": {
             "type": "object",
