@@ -100,7 +100,7 @@ function log(msg) {
 const state = {
   phase: 'UNINIT', // UNINIT / STOPPED / IDLE / LISTENING / THINKING / SPEAKING / DOWNLOADING
   config: {
-    wakeWords: ['嘿辛蒂'],        // 中文唤醒词(内置候选)
+    wakeWords: ['嘿Cindy'],       // 默认唤醒词(内置候选)
     volume: 1.0,                  // 0~2
     inputDevice: '',              // 空 = 默认
     outputDevice: '',             // 空 = 默认
@@ -141,6 +141,9 @@ const T = (p) => p.replace(/\\/g, '/'); // wasm 内部 fopen 需要 / 路径
 
 // 唤醒词: 内置候选词表(拼音已按声母/韵母分离,全部校验过能命中 tokens.txt)
 const WAKE_PINYIN = {
+  '嘿Cindy': ['h ēi s īn d ì @嘿Cindy', 'h ēi C I n d y @嘿Cindy'],
+  '你好Cindy': ['n ǐ h ǎo s īn d ì @你好Cindy', 'n ǐ h ǎo C I n d y @你好Cindy'],
+  '小Cindy': ['x iǎo s īn d ì @小Cindy', 'x iǎo C I n d y @小Cindy'],
   '嘿辛蒂': 'h ēi x īn d ì @嘿辛蒂',
   '你好辛蒂': 'n ǐ h ǎo x īn d ì @你好辛蒂',
   '小辛蒂': 'x iǎo x īn d ì @小辛蒂',
@@ -152,10 +155,11 @@ function kwsKeywordLines() {
   const kwLines = [];
   for (const w of state.config.wakeWords) {
     const py = WAKE_PINYIN[w];
-    if (py) kwLines.push(py);
+    if (Array.isArray(py)) kwLines.push(...py);
+    else if (py) kwLines.push(py);
     else log(`唤醒词「${w}」暂不支持,已跳过。可选:${Object.keys(WAKE_PINYIN).join('/')}`);
   }
-  if (!kwLines.length) kwLines.push(WAKE_PINYIN['嘿辛蒂']);
+  if (!kwLines.length) kwLines.push(...WAKE_PINYIN['嘿Cindy']);
   return kwLines;
 }
 

@@ -5,7 +5,7 @@ const GHOST_ID = 'earbud-speaker';
 const PHASE_TEXT = {
   UNINIT: ['未初始化', '等待插件启动'],
   STOPPED: ['已停止', '模型未就绪或被手动停止'],
-  IDLE: ['待命中', '说唤醒词「嘿辛蒂」开始提问'],
+  IDLE: ['待命中', '说唤醒词「嘿Cindy」开始提问'],
   LISTENING: ['聆听中', '我在听你说…说完停顿一下'],
   THINKING: ['思考中', 'Cindy 正在组织答案'],
   SPEAKING: ['播报中', '正在通过耳机播放答案'],
@@ -115,7 +115,7 @@ function showWakeTest(result) {
     el.textContent = '已触发唤醒词（' + result.durationMs + 'ms）';
     addLog('唤醒自测命中');
   } else {
-    el.textContent = '未触发。请确认录音里有当前唤醒词（如「嘿辛蒂」），时长建议 1~5 秒。';
+    el.textContent = '未触发。请确认录音里有当前唤醒词（如「嘿Cindy」），时长建议 1~5 秒。';
     addLog('唤醒自测未命中');
   }
 }

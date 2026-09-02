@@ -97,8 +97,10 @@ async function saveKv(patch) {
 }
 
 function speakerConfigFromPrefs(prefs) {
+  let wakeWords = prefs.wakeWords && prefs.wakeWords.length ? prefs.wakeWords : ['嘿Cindy'];
+  if (wakeWords.length === 1 && wakeWords[0] === '嘿辛蒂') wakeWords = ['嘿Cindy'];
   return {
-    wakeWords: prefs.wakeWords || ['嘿辛蒂'],
+    wakeWords,
     volume: prefs.volume ?? 1.0,
     inputDevice: String(prefs.inputDevice || ''),
     outputDevice: String(prefs.outputDevice || ''),

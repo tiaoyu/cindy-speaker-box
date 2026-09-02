@@ -3,7 +3,7 @@
   "minCindyVersion": "1.2.3",
   "id": "earbud-speaker",
   "name": "耳机智能音箱",
-  "description": "把蓝牙耳机变成智能音箱:说唤醒词(默认「嘿辛蒂」)提问,Cindy 思考后把口语化答案用本地语音播报回耳机。语音识别与语音合成全部本地离线运行,无需 API key;完整会话在侧边栏可回看。",
+  "description": "把蓝牙耳机变成智能音箱:说唤醒词(默认「嘿Cindy」)提问,Cindy 思考后把口语化答案用本地语音播报回耳机。语音识别与语音合成全部本地离线运行,无需 API key;完整会话在侧边栏可回看。",
   "whenToUse": "需要把蓝牙耳机当智能音箱用语音提问、让 Cindy 语音播报答案,或启动/停止语音聆听、用文字模拟一次语音问答时找我。",
   "version": "1.0.0",
   "entry": "main.js",
@@ -32,9 +32,9 @@
           },
           "config": {
             "type": "object",
-            "description": "action=configure 时传:{wakeWords:[\"嘿辛蒂\"], volume:1.0, inputDevice:\"\", outputDevice:\"\"}。设备 id 来自插件设置页的设备列表;空字符串表示系统默认。",
+            "description": "action=configure 时传:{wakeWords:[\"嘿Cindy\"], volume:1.0, inputDevice:\"\", outputDevice:\"\"}。设备 id 来自插件设置页的设备列表;空字符串表示系统默认。",
             "properties": {
-              "wakeWords": { "type": "array", "items": { "type": "string" }, "description": "唤醒词列表,可选值:嘿辛蒂/你好辛蒂/小辛蒂/嘿小辛/你好小辛" },
+              "wakeWords": { "type": "array", "items": { "type": "string" }, "description": "唤醒词列表,可选值:嘿Cindy/你好Cindy/小Cindy/嘿辛蒂/你好辛蒂/小辛蒂/嘿小辛/你好小辛" },
               "volume": { "type": "number", "description": "播报音量 0.2~2.0" },
               "inputDevice": { "type": "string", "description": "麦克风设备 id;空字符串表示系统默认输入" },
               "outputDevice": { "type": "string", "description": "播放设备 id;空字符串表示系统默认输出" }

@@ -137,7 +137,8 @@ let currentCfg = {};
 
 fetch('/kv').then((r) => r.json()).then((cfg) => {
   currentCfg = cfg || {};
-  $('#wakeWord').value = currentCfg.wakeWords && currentCfg.wakeWords[0] ? currentCfg.wakeWords[0] : '嘿辛蒂';
+  const wake = currentCfg.wakeWords && currentCfg.wakeWords[0] ? currentCfg.wakeWords[0] : '嘿Cindy';
+  $('#wakeWord').value = wake === '嘿辛蒂' ? '嘿Cindy' : wake;
   $('#volume').value = currentCfg.volume ?? 1.0;
   $('#volLabel').textContent = Math.round(($('#volume').value) * 100) + '%';
   $('#autoStart').checked = !!currentCfg.autoStart;
