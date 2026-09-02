@@ -12,9 +12,24 @@ const { URL } = require('node:url');
 const ROOT = __dirname;
 const SHERPA = path.join(ROOT, 'sherpa');
 const SOX_DIR = path.join(ROOT, 'vendor', 'sox');
-const SOX = path.join(SOX_DIR, 'sox.exe');
+// 录音/播放统一走 sox:Windows 用随包 sox.exe,macOS/Linux 找 PATH 或 Homebrew 里的 sox
+function resolveSox() {
+  if (process.platform === 'win32') return path.join(SOX_DIR, 'sox.exe');
+  const candidates = [
+    ...String(process.env.PATH || '').split(path.delimiter).filter(Boolean).map((d) => path.join(d, 'sox')),
+    '/opt/homebrew/bin/sox',
+    '/usr/local/bin/sox',
+  ];
+  for (const p of candidates) {
+    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch { /* next */ }
+  }
+  return null;
+}
+const SOX = resolveSox();
 
-const DATA_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), 'earbud-speaker');
+const DATA_DIR = process.platform === 'win32'
+  ? path.join(process.env.LOCALAPPDATA || os.homedir(), 'earbud-speaker')
+  : path.join(os.homedir(), 'earbud-speaker');
 const MODELS_DIR = path.join(DATA_DIR, 'models');
 
 // 模型清单(下载 + 解压 + 引擎路径)。GitHub 直连为主,镜像兜底。
@@ -228,14 +243,26 @@ function soxRecArgs() {
 function startRec() {
   if (state.rec) return;
   const child = spawn(SOX, soxRecArgs(), { windowsHide: true });
+  const startedAt = Date.now();
+  let gotData = false;
   child.on('error', (e) => {
     log('录音进程启动失败: ' + e.message + '(请确认蓝牙耳机麦克风已连接并设为默认设备)');
     state.rec = null;
+    notify('rec-error', { message: '录音进程启动失败: ' + e.message });
     setPhase('IDLE');
   });
-  child.on('exit', () => { if (state.rec === child) state.rec = null; });
+  child.on('exit', (code) => {
+    if (state.rec !== child) return;
+    state.rec = null;
+    // 启动后极短时间内没收到任何音频就退出 = 打不开录音设备,如实上报而不是静默停在 IDLE
+    if (!gotData && Date.now() - startedAt < 3000) {
+      log('录音设备打开失败(退出码 ' + code + '):没有可用的麦克风输入设备');
+      notify('rec-error', { message: '没有可用的麦克风输入设备,请连接蓝牙耳机(或 USB 麦克风)并在系统设置中设为默认输入设备' });
+      stopAll();
+    }
+  });
   child.stderr.on('data', (d) => { /* sox stderr 忽略,避免噪声 */ });
-  child.stdout.on('data', (chunk) => onPcm(chunk));
+  child.stdout.on('data', (chunk) => { gotData = true; onPcm(chunk); });
   state.rec = child;
 }
 
@@ -385,6 +412,13 @@ function playRaw(pcmBuf, sr, volume, cb) {
     cb && cb(ok);
   };
   child.on('error', (e) => { log('播放失败: ' + e.message); finish(false); });
+  // 播放设备打不开时 sox 会立刻退出:cb(true) 会把状态机带回 IDLE,但要能暴露问题
+  child.stderr.on('data', (d) => {
+    const s = String(d || '');
+    if (s.includes('can not open audio device')) {
+      log('播放设备打开失败:没有可用的音频输出设备(请连接耳机/扬声器)');
+    }
+  });
   child.on('exit', () => finish(true));
   child.stderr.on('data', () => { /* ignore */ });
   state.speakChild = child;
@@ -461,8 +495,13 @@ function downloadFile(urls, dest, onProgress, cb) {
 }
 
 function extractTarBz2(tarPath, destDir, cb) {
-  // Windows 10+ 自带 bsdtar,支持 .tar.bz2
-  const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  // Windows 10+ 自带 bsdtar;macOS 自带 /usr/bin/tar(同为 bsdtar);Linux 一般也有 tar
+  let tar;
+  if (process.platform === 'win32') {
+    tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  } else {
+    tar = 'tar';
+  }
   try {
     execFileSync(tar, ['-xjf', tarPath, '-C', destDir], { stdio: 'pipe', timeout: 600000 });
     cb(null);
@@ -509,8 +548,8 @@ function downloadModels(cb) {
         notify('dl-progress', { key, pct: 100, name: mm.tarName });
         log('解压 ' + mm.tarName + ' ...');
         extractTarBz2(dest, mm.dir, (e2) => {
+          if (e2) { next(new Error('解压失败: ' + e2.message + '(压缩包已保留,重试无需重新下载)')); return; }
           try { fs.unlinkSync(dest); } catch { /* */ }
-          if (e2) { next(new Error('解压失败: ' + e2.message)); return; }
           next(null);
         });
       } else {
@@ -536,8 +575,8 @@ function applyAndStart() {
     setPhase('STOPPED');
     return false;
   }
-  if (!fs.existsSync(SOX)) {
-    log('缺少随包 sox.exe(vendor/sox),无法录音播放');
+  if (!SOX || !fs.existsSync(SOX)) {
+    log('找不到 sox(录音/播放依赖)。请安装:brew install sox');
     setPhase('STOPPED');
     return false;
   }

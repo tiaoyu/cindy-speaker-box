@@ -22,6 +22,9 @@ cindy.onHostMessage(async function (msg) {
       }
     } else if (msg.method === 'need-models') {
       broadcast({ type: 'need-models' });
+    } else if (msg.method === 'rec-error') {
+      broadcast({ type: 'rec-error', message: p.message });
+      cindy.send({ type: 'notify', tone: 'error', text: String(p.message || '录音不可用').slice(0, 120) });
     } else if (msg.method === 'log') {
       log(p.msg);
     }
